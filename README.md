@@ -393,3 +393,66 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ---
 
 Made with ❤️ by [EmailListChecker](https://emaillistchecker.io)
+
+### Batch Verification with File Upload
+
+You can also upload CSV, TXT, or XLSX files for batch verification:
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+	"github.com/Emaillistchecker-io/emaillistchecker-go"
+)
+
+func main() {
+	client := emaillistchecker.NewClient("your_api_key")
+	
+	// Upload file for batch verification
+	name := "My Email List"
+	batch, err := client.VerifyBatchFile("path/to/emails.csv", &name, nil, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Batch ID: %d\n", batch.ID)
+	fmt.Printf("Total emails: %d\n", batch.TotalEmails)
+	
+	// Check progress
+	for {
+		status, err := client.GetBatchStatus(batch.ID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		
+		fmt.Printf("Progress: %d%%\n", status.Progress)
+		
+		if status.Status == "completed" {
+			break
+		}
+		
+		time.Sleep(5 * time.Second)
+	}
+	
+	// Download results
+	results, err := client.GetBatchResults(batch.ID, "json", "valid")
+	if err != nil {
+		log.Fatal(err)
+	}
+	
+	fmt.Printf("Results: %v\n", results)
+}
+```
+
+**Supported file formats:**
+- CSV (.csv) - Comma-separated values
+- TXT (.txt) - Plain text, one email per line
+- Excel (.xlsx, .xls) - Excel spreadsheet
+
+**File requirements:**
+- Max file size: 10MB
+- Max emails: 10,000 per file
+- Files are automatically parsed to extract emails

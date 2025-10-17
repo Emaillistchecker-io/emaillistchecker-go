@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -151,6 +154,115 @@ func (c *Client) VerifyBatch(emails []string, name, callbackURL string, autoStar
 	var directResult BatchResponse
 	err = c.request("POST", "/verify/batch", req, &directResult)
 	return &directResult, err
+}
+
+// VerifyBatchFile uploads a file for batch verification (CSV, TXT, or XLSX)
+func (c *Client) VerifyBatchFile(filePath string, name, callbackURL *string, autoStart bool) (*BatchResponse, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add file
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return nil, err
+	}
+
+	// Add auto_start
+	if err := writer.WriteField("auto_start", strconv.FormatBool(autoStart)); err != nil {
+		return nil, err
+	}
+
+	// Add optional fields
+	if name != nil {
+		if err := writer.WriteField("name", *name); err != nil {
+			return nil, err
+		}
+	}
+	if callbackURL != nil {
+		if err := writer.WriteField("callback_url", *callbackURL); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/verify/batch/upload", body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "EmailListChecker-Go/1.0.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle errors
+	if resp.StatusCode >= 400 {
+		var errData map[string]interface{}
+		_ = json.Unmarshal(responseBody, &errData)
+
+		switch resp.StatusCode {
+		case 401:
+			msg := "Invalid API key"
+			if errData != nil && errData["error"] != nil {
+				msg = errData["error"].(string)
+			}
+			return nil, NewAuthenticationError(msg, resp.StatusCode, errData)
+
+		case 402:
+			msg := "Insufficient credits"
+			if errData != nil && errData["error"] != nil {
+				msg = errData["error"].(string)
+			}
+			return nil, NewInsufficientCreditsError(msg, resp.StatusCode, errData)
+
+		case 422:
+			msg := "Validation error"
+			if errData != nil && errData["message"] != nil {
+				msg = errData["message"].(string)
+			}
+			return nil, NewValidationError(msg, resp.StatusCode, errData)
+
+		default:
+			msg := fmt.Sprintf("API error: %d", resp.StatusCode)
+			if errData != nil && errData["error"] != nil {
+				msg = errData["error"].(string)
+			}
+			return nil, NewAPIError(msg, resp.StatusCode, errData)
+		}
+	}
+
+	var result struct {
+		Success bool           `json:"success"`
+		Data    *BatchResponse `json:"data"`
+	}
+
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Data, nil
 }
 
 // GetBatchStatus gets batch verification status
